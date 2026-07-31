@@ -29,5 +29,24 @@ import Testing
 @Test func createsSortableFilename() {
     let date = Date(timeIntervalSince1970: 0)
     let utc = TimeZone(secondsFromGMT: 0)!
-    #expect(TranscriptFormatter.filename(for: date, timeZone: utc) == "Meeting-1970-01-01-000000.md")
+    #expect(
+        TranscriptFormatter.filename(
+            title: "Q3 / Product: Planning?",
+            for: date,
+            timeZone: utc
+        ) == "1970-01-01_000000_Q3-Product-Planning.md"
+    )
+}
+
+@Test func usesReadableHeaderAndFallbackTitle() {
+    let date = Date(timeIntervalSince1970: 0)
+    let utc = TimeZone(secondsFromGMT: 0)!
+    let header = TranscriptFormatter.header(
+        title: "  ",
+        startedAt: date,
+        timeZone: utc
+    )
+
+    #expect(header.contains("# Untitled Meeting"))
+    #expect(header.contains("**01 Jan 1970 · 00:00**"))
 }

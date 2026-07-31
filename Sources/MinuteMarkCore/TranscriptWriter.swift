@@ -4,18 +4,18 @@ public actor TranscriptWriter {
     public let fileURL: URL
     private let handle: FileHandle
 
-    public init(directory: URL, startedAt: Date = Date()) throws {
+    public init(directory: URL, title: String, startedAt: Date = Date()) throws {
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true
         )
 
         fileURL = directory.appendingPathComponent(
-            TranscriptFormatter.filename(for: startedAt)
+            TranscriptFormatter.filename(title: title, for: startedAt)
         )
 
         let header = TranscriptFormatter.header(
-            title: "Meeting — \(startedAt.formatted(date: .abbreviated, time: .shortened))",
+            title: title,
             startedAt: startedAt
         )
         try Data(header.utf8).write(to: fileURL, options: .atomic)

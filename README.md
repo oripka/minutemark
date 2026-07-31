@@ -9,6 +9,7 @@ audio locally into Markdown. MinuteMark does not retain audio recordings.
 - Labels microphone speech as **You** and system audio as **Meeting**
 - Shows progressive transcription in the menu-bar popover
 - Writes finalized phrases directly to a Markdown file
+- Uses the meeting title in the Markdown heading and a safe, sortable filename
 - Supports English and German Apple speech models
 - Supports automatic or manual input-channel selection for multi-channel
   audio interfaces
@@ -44,6 +45,8 @@ transcription begins.
 - Left-click the menu-bar waveform to open the transcription controls.
 - Right-click the icon for Settings or Quit.
 - Choose language, then select **Start transcription**.
+- Enter a title such as `Product planning`; the note will be named like
+  `2026-07-31_104512_Product-planning.md`.
 - Choose microphone, input-channel mode, and output folder in Settings.
 - Select **Open note** to open the current Markdown file in TextEdit.
 

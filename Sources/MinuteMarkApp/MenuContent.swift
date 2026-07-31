@@ -21,6 +21,14 @@ struct MenuContent: View {
             }
 
             HStack {
+                Text("Title")
+                    .foregroundStyle(.secondary)
+                TextField("e.g. Product planning", text: $model.transcriptTitle)
+                    .textFieldStyle(.roundedBorder)
+            }
+            .disabled(model.isRecording || model.isBusy)
+
+            HStack {
                 Text("Language")
                     .foregroundStyle(.secondary)
                 Spacer()

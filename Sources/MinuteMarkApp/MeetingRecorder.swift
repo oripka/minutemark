@@ -14,6 +14,7 @@ final class MeetingRecorder {
     private var diagnosticLog: DiagnosticLog?
 
     func start(
+        title: String,
         localeIdentifier: String,
         microphoneDeviceID: String,
         microphoneInputChannel: Int,
@@ -22,7 +23,10 @@ final class MeetingRecorder {
         onError: @escaping ErrorHandler,
         onDiagnostics: @escaping DiagnosticsHandler
     ) async throws -> URL {
-        let writer = try TranscriptWriter(directory: outputDirectory)
+        let writer = try TranscriptWriter(
+            directory: outputDirectory,
+            title: title
+        )
         self.writer = writer
         let transcriptURL = await writer.fileURL
         let diagnosticLog = try DiagnosticLog(transcriptURL: transcriptURL)

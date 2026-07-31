@@ -34,6 +34,7 @@ enum MicrophoneInputChannel: Int, CaseIterable, Identifiable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var language: MeetingLanguage = .english
+    @Published var transcriptTitle = ""
     @Published var outputDirectory: URL
     @Published var selectedMicrophoneID: String {
         didSet {
@@ -134,6 +135,7 @@ final class AppModel: ObservableObject {
         do {
             let recorder = MeetingRecorder()
             let url = try await recorder.start(
+                title: transcriptTitle,
                 localeIdentifier: language.rawValue,
                 microphoneDeviceID: selectedMicrophoneID,
                 microphoneInputChannel: microphoneInputChannel.rawValue,
