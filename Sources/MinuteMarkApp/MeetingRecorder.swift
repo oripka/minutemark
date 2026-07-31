@@ -6,6 +6,7 @@ final class MeetingRecorder {
     typealias ResultHandler = @Sendable (TranscriptionUpdate) -> Void
     typealias ErrorHandler = @Sendable (String) -> Void
     typealias DiagnosticsHandler = @Sendable (String) -> Void
+    typealias DownloadProgressHandler = @Sendable (Double) -> Void
 
     private let microphoneTranscriber = LiveTranscriber()
     private let meetingTranscriber = LiveTranscriber()
@@ -21,7 +22,8 @@ final class MeetingRecorder {
         outputDirectory: URL,
         onResult: @escaping ResultHandler,
         onError: @escaping ErrorHandler,
-        onDiagnostics: @escaping DiagnosticsHandler
+        onDiagnostics: @escaping DiagnosticsHandler,
+        onDownloadProgress: @escaping DownloadProgressHandler
     ) async throws -> URL {
         let writer = try TranscriptWriter(
             directory: outputDirectory,
@@ -64,7 +66,8 @@ final class MeetingRecorder {
                 inputChannel: microphoneInputChannel,
                 onResult: resultSink,
                 onError: errorSink,
-                onDiagnostics: diagnosticsSink
+                onDiagnostics: diagnosticsSink,
+                onDownloadProgress: onDownloadProgress
             )
             diagnosticLog.append("Microphone transcriber ready")
             diagnosticLog.append("Preparing meeting transcriber")
@@ -74,7 +77,8 @@ final class MeetingRecorder {
                 inputChannel: nil,
                 onResult: resultSink,
                 onError: errorSink,
-                onDiagnostics: diagnosticsSink
+                onDiagnostics: diagnosticsSink,
+                onDownloadProgress: onDownloadProgress
             )
             diagnosticLog.append("Meeting transcriber ready")
 

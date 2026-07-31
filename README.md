@@ -12,7 +12,10 @@ audio locally into Markdown. MinuteMark does not retain audio recordings.
 - Shows progressive transcription in the menu-bar popover
 - Writes finalized phrases directly to a Markdown file
 - Uses the meeting title in the Markdown heading and a safe, sortable filename
-- Supports English and German Apple speech models
+- Offers every on-device language reported by Apple’s `SpeechTranscriber`, with
+  an Automatic option that follows the Mac’s preferred language
+- Shows whether the selected language model is installed; missing models
+  require confirmation and show progress while downloading
 - Supports automatic or manual input-channel selection for multi-channel
   audio interfaces
 - Shows a transient microphone activity meter in Settings without storing audio
@@ -43,8 +46,7 @@ identity is installed.
 MinuteMark is a menu-bar app and intentionally has no Dock icon. On first use,
 it explains where to find its waveform-and-microphone menu-bar icon. Allow
 Microphone and Screen & System Audio Recording access.
-The selected English or German Apple speech model may download once before
-transcription begins.
+The selected Apple speech model may download once before transcription begins.
 
 ## Use
 

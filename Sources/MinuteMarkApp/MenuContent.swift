@@ -39,18 +39,41 @@ struct MenuContent: View {
             }
             .disabled(model.isRecording || model.isBusy)
 
-            HStack {
-                Text("Language")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 72, alignment: .leading)
-                Picker("", selection: $model.language) {
-                    ForEach(MeetingLanguage.allCases) { language in
-                        Text(language.label).tag(language)
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack {
+                    Text("Language")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 72, alignment: .leading)
+                    Spacer()
+                    Picker("", selection: $model.selectedLanguageID) {
+                        Text("Automatic (\(model.resolvedLanguage.label))")
+                            .tag(AppModel.automaticLanguageID)
+                        Divider()
+                        ForEach(model.languages) { language in
+                            Text(language.label).tag(language.id)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 190)
                 }
-                .labelsHidden()
-                .frame(width: 145)
-                Spacer()
+
+                if let progress = model.languageModelDownloadProgress {
+                    HStack(spacing: 8) {
+                        ProgressView(value: progress)
+                            .frame(width: 130)
+                        Text("\(Int((progress * 100).rounded()))%")
+                            .monospacedDigit()
+                            .frame(width: 34, alignment: .trailing)
+                    }
+                    .font(.caption)
+                } else {
+                    Label(
+                        model.languageModelState.label,
+                        systemImage: model.languageModelState.symbolName
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
             }
             .disabled(model.isRecording || model.isBusy)
 
@@ -106,5 +129,23 @@ struct MenuContent: View {
         }
         .padding(16)
         .frame(width: 380)
+        .confirmationDialog(
+            "Download language model?",
+            isPresented: $model.isLanguageDownloadConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Download and Start") {
+                Task {
+                    await model.confirmLanguageDownloadAndStart()
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                model.cancelLanguageDownload()
+            }
+        } message: {
+            Text(
+                "MinuteMark needs Apple’s on-device \(model.pendingLanguageDownload?.label ?? "selected language") model. It will be downloaded once and used locally."
+            )
+        }
     }
 }

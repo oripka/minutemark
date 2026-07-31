@@ -3,16 +3,43 @@ import Combine
 import Foundation
 import MinuteMarkCore
 import ServiceManagement
+import Speech
 
-enum MeetingLanguage: String, CaseIterable, Identifiable {
-    case english = "en-US"
-    case german = "de-DE"
+struct MeetingLanguage: Identifiable, Hashable, Sendable {
+    let id: String
+    let label: String
 
-    var id: String { rawValue }
+    init(locale: Locale) {
+        id = locale.identifier
+        label = Locale.current.localizedString(forIdentifier: locale.identifier)
+            ?? locale.identifier
+    }
+}
+
+enum LanguageModelState: Equatable {
+    case checking
+    case installed
+    case downloading
+    case downloadRequired
+    case unsupported
+
     var label: String {
         switch self {
-        case .english: "English"
-        case .german: "Deutsch"
+        case .checking: "Checking language model…"
+        case .installed: "On-device model installed"
+        case .downloading: "Language model downloading…"
+        case .downloadRequired: "Downloads automatically on first use"
+        case .unsupported: "Language model unavailable"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .checking: "ellipsis.circle"
+        case .installed: "checkmark.circle.fill"
+        case .downloading: "arrow.down.circle"
+        case .downloadRequired: "arrow.down.circle"
+        case .unsupported: "exclamationmark.triangle"
         }
     }
 }
@@ -34,7 +61,25 @@ enum MicrophoneInputChannel: Int, CaseIterable, Identifiable {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var language: MeetingLanguage = .english
+    static let automaticLanguageID = "automatic"
+
+    @Published var selectedLanguageID: String {
+        didSet {
+            UserDefaults.standard.set(
+                selectedLanguageID,
+                forKey: "transcriptionLanguage"
+            )
+            Task { await refreshLanguageModelState() }
+        }
+    }
+    @Published private(set) var languages: [MeetingLanguage] = [
+        MeetingLanguage(locale: Locale(identifier: "en-US")),
+        MeetingLanguage(locale: Locale(identifier: "de-DE"))
+    ]
+    @Published private(set) var languageModelState: LanguageModelState = .checking
+    @Published private(set) var languageModelDownloadProgress: Double?
+    @Published var isLanguageDownloadConfirmationPresented = false
+    @Published private(set) var pendingLanguageDownload: MeetingLanguage?
     @Published var transcriptTitle = ""
     @Published var outputDirectory: URL
     @Published var selectedMicrophoneID: String {
@@ -64,7 +109,18 @@ final class AppModel: ObservableObject {
 
     private var recorder: MeetingRecorder?
 
+    var resolvedLanguage: MeetingLanguage {
+        if selectedLanguageID != Self.automaticLanguageID,
+           let selected = languages.first(where: { $0.id == selectedLanguageID }) {
+            return selected
+        }
+        return preferredLanguage(from: languages)
+    }
+
     init() {
+        selectedLanguageID = UserDefaults.standard.string(
+            forKey: "transcriptionLanguage"
+        ) ?? Self.automaticLanguageID
         selectedMicrophoneID = UserDefaults.standard.string(
             forKey: "microphoneDeviceID"
         ) ?? ""
@@ -79,6 +135,54 @@ final class AppModel: ObservableObject {
         }
         refreshLaunchAtLoginStatus()
         refreshMicrophones()
+        Task {
+            await refreshLanguages()
+            await refreshLanguageModelState()
+        }
+    }
+
+    func refreshLanguages() async {
+        let supportedLocales = await SpeechTranscriber.supportedLocales
+        let supportedLanguages = supportedLocales
+            .map(MeetingLanguage.init(locale:))
+            .reduce(into: [String: MeetingLanguage]()) { result, language in
+                result[language.id] = language
+            }
+            .values
+            .sorted {
+                $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+            }
+
+        guard !supportedLanguages.isEmpty else { return }
+        languages = supportedLanguages
+        if selectedLanguageID != Self.automaticLanguageID,
+           !languages.contains(where: { $0.id == selectedLanguageID }) {
+            selectedLanguageID = Self.automaticLanguageID
+        }
+    }
+
+    func refreshLanguageModelState() async {
+        let language = resolvedLanguage
+        languageModelState = .checking
+        let transcriber = SpeechTranscriber(
+            locale: Locale(identifier: language.id),
+            preset: .progressiveTranscription
+        )
+        let status = await AssetInventory.status(forModules: [transcriber])
+
+        guard resolvedLanguage.id == language.id else { return }
+        switch status {
+        case .installed:
+            languageModelState = .installed
+        case .downloading:
+            languageModelState = .downloading
+        case .supported:
+            languageModelState = .downloadRequired
+        case .unsupported:
+            languageModelState = .unsupported
+        @unknown default:
+            languageModelState = .checking
+        }
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -151,18 +255,54 @@ final class AppModel: ObservableObject {
 
     func start() async {
         guard !isBusy, !isRecording else { return }
+        await refreshLanguageModelState()
+
+        if languageModelState == .downloadRequired {
+            pendingLanguageDownload = resolvedLanguage
+            isLanguageDownloadConfirmationPresented = true
+            return
+        }
+        await beginTranscription()
+    }
+
+    func confirmLanguageDownloadAndStart() async {
+        guard let pendingLanguageDownload,
+              pendingLanguageDownload.id == resolvedLanguage.id
+        else {
+            cancelLanguageDownload()
+            return
+        }
+        self.pendingLanguageDownload = nil
+        isLanguageDownloadConfirmationPresented = false
+        await beginTranscription()
+    }
+
+    func cancelLanguageDownload() {
+        pendingLanguageDownload = nil
+        isLanguageDownloadConfirmationPresented = false
+    }
+
+    private func beginTranscription() async {
+        guard !isBusy, !isRecording else { return }
         isBusy = true
         errorMessage = nil
         needsScreenPermission = false
         latestLine = nil
         pipelineStatus = nil
-        status = "Preparing \(language.label) model…"
+        languageModelDownloadProgress = nil
+        let language = resolvedLanguage
+        if languageModelState == .downloadRequired {
+            status = "Downloading \(language.label) model…"
+            languageModelState = .downloading
+        } else {
+            status = "Preparing \(language.label) model…"
+        }
 
         do {
             let recorder = MeetingRecorder()
             let url = try await recorder.start(
                 title: transcriptTitle,
-                localeIdentifier: language.rawValue,
+                localeIdentifier: language.id,
                 microphoneDeviceID: selectedMicrophoneID,
                 microphoneInputChannel: microphoneInputChannel.rawValue,
                 outputDirectory: outputDirectory
@@ -179,17 +319,60 @@ final class AppModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.pipelineStatus = message
                 }
+            } onDownloadProgress: { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    self?.languageModelState = .downloading
+                    self?.languageModelDownloadProgress = progress.isFinite
+                        ? min(1, max(0, progress))
+                        : 0
+                }
             }
             self.recorder = recorder
             transcriptURL = url
             isRecording = true
             status = "Transcribing microphone + meeting audio"
+            languageModelState = .installed
+            languageModelDownloadProgress = nil
         } catch {
             errorMessage = error.localizedDescription
             needsScreenPermission = (error as? CaptureError) == .screenRecordingPermission
             status = "Could not start"
+            languageModelDownloadProgress = nil
         }
         isBusy = false
+    }
+
+    private func preferredLanguage(
+        from supportedLanguages: [MeetingLanguage]
+    ) -> MeetingLanguage {
+        for preferredIdentifier in Locale.preferredLanguages {
+            let preferredLocale = Locale(identifier: preferredIdentifier)
+            if let exact = supportedLanguages.first(where: {
+                $0.id.replacingOccurrences(of: "_", with: "-")
+                    .caseInsensitiveCompare(
+                        preferredIdentifier.replacingOccurrences(of: "_", with: "-")
+                    ) == .orderedSame
+            }) {
+                return exact
+            }
+            if let regionalMatch = supportedLanguages.first(where: {
+                let locale = Locale(identifier: $0.id)
+                return locale.language.languageCode
+                        == preferredLocale.language.languageCode &&
+                    locale.region == preferredLocale.region
+            }) {
+                return regionalMatch
+            }
+            if let exact = supportedLanguages.first(where: {
+                Locale(identifier: $0.id).language.languageCode
+                    == preferredLocale.language.languageCode
+            }) {
+                return exact
+            }
+        }
+        return supportedLanguages.first(where: {
+            Locale(identifier: $0.id).language.languageCode?.identifier == "en"
+        }) ?? supportedLanguages[0]
     }
 
     func stop() async {

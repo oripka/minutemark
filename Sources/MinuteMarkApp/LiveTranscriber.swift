@@ -13,6 +13,7 @@ actor LiveTranscriber {
     typealias ResultHandler = @Sendable (TranscriptionUpdate) async -> Void
     typealias ErrorHandler = @Sendable (String) -> Void
     typealias DiagnosticsHandler = @Sendable (String) -> Void
+    typealias DownloadProgressHandler = @Sendable (Double) -> Void
 
     private var analyzer: SpeechAnalyzer?
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
@@ -39,7 +40,8 @@ actor LiveTranscriber {
         inputChannel: Int?,
         onResult: @escaping ResultHandler,
         onError: @escaping ErrorHandler,
-        onDiagnostics: @escaping DiagnosticsHandler
+        onDiagnostics: @escaping DiagnosticsHandler,
+        onDownloadProgress: @escaping DownloadProgressHandler
     ) async throws {
         guard SpeechTranscriber.isAvailable else {
             throw TranscriptionError.unavailable
@@ -62,7 +64,15 @@ actor LiveTranscriber {
             ) else {
                 throw TranscriptionError.modelUnavailable(localeIdentifier)
             }
+            let progressTask = Task {
+                while !Task.isCancelled {
+                    onDownloadProgress(request.progress.fractionCompleted)
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+            }
+            defer { progressTask.cancel() }
             try await request.downloadAndInstall()
+            onDownloadProgress(1)
         }
         _ = try await AssetInventory.reserve(locale: locale)
 
