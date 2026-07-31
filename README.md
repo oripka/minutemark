@@ -15,6 +15,8 @@ audio locally into Markdown. MinuteMark does not retain audio recordings.
 - Supports English and German Apple speech models
 - Supports automatic or manual input-channel selection for multi-channel
   audio interfaces
+- Shows a transient microphone activity meter in Settings without storing audio
+- Can optionally launch at login
 - Captures ordinary system audio from apps such as Zoom, Webex, Teams, and
   browsers
 
@@ -38,7 +40,9 @@ available Apple Development signing identity so macOS privacy permissions
 remain stable between builds. It falls back to ad-hoc signing if no development
 identity is installed.
 
-On first use, allow Microphone and Screen & System Audio Recording access.
+MinuteMark is a menu-bar app and intentionally has no Dock icon. On first use,
+it explains where to find its waveform-and-microphone menu-bar icon. Allow
+Microphone and Screen & System Audio Recording access.
 The selected English or German Apple speech model may download once before
 transcription begins.
 
@@ -76,7 +80,8 @@ The persistent output is:
 - A Markdown transcript
 - A local text diagnostics log containing timestamps, pipeline status, device
   configuration, and transcription results
-- Local preferences for microphone, channel mode, and notes directory
+- Local preferences for microphone, channel mode, notes directory, onboarding,
+  and the optional launch-at-login setting
 
 Diagnostic logs are currently verbose because the app is in an MVP stage.
 

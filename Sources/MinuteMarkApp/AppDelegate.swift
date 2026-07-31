@@ -48,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     isRecording: isRecording
                 )
             }
+
+        showFirstLaunchExplanationIfNeeded()
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
@@ -156,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = NSWindow(contentViewController: hostingController)
             window.title = "MinuteMark Settings"
             window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 480, height: 230))
+            window.setContentSize(NSSize(width: 500, height: 350))
             window.isReleasedWhenClosed = false
             window.center()
             settingsWindowController = NSWindowController(window: window)
@@ -169,6 +171,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    private func showFirstLaunchExplanationIfNeeded() {
+        let defaultsKey = "didShowMenuBarExplanation"
+        guard !UserDefaults.standard.bool(forKey: defaultsKey) else { return }
+
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "MinuteMark lives in your menu bar"
+            alert.informativeText = "MinuteMark has no Dock icon. Click the waveform-and-microphone icon in the menu bar to start transcription, or right-click it for Transcripts and Settings."
+            alert.alertStyle = .informational
+            alert.icon = NSImage(named: NSImage.applicationIconName)
+            alert.addButton(withTitle: "Got It")
+            alert.runModal()
+            UserDefaults.standard.set(true, forKey: defaultsKey)
+        }
     }
 
     private func statusImage(isRecording: Bool) -> NSImage? {

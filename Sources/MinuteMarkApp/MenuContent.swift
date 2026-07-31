@@ -33,6 +33,7 @@ struct MenuContent: View {
             HStack {
                 Text("Title")
                     .foregroundStyle(.secondary)
+                    .frame(width: 72, alignment: .leading)
                 TextField("e.g. Product planning", text: $model.transcriptTitle)
                     .textFieldStyle(.roundedBorder)
             }
@@ -41,7 +42,7 @@ struct MenuContent: View {
             HStack {
                 Text("Language")
                     .foregroundStyle(.secondary)
-                Spacer()
+                    .frame(width: 72, alignment: .leading)
                 Picker("", selection: $model.language) {
                     ForEach(MeetingLanguage.allCases) { language in
                         Text(language.label).tag(language)
@@ -49,6 +50,7 @@ struct MenuContent: View {
                 }
                 .labelsHidden()
                 .frame(width: 145)
+                Spacer()
             }
             .disabled(model.isRecording || model.isBusy)
 

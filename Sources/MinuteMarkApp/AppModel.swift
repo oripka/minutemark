@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import MinuteMarkCore
+import ServiceManagement
 
 enum MeetingLanguage: String, CaseIterable, Identifiable {
     case english = "en-US"
@@ -58,6 +59,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var needsScreenPermission = false
     @Published private(set) var pipelineStatus: String?
+    @Published private(set) var launchAtLoginEnabled = false
+    @Published private(set) var launchAtLoginError: String?
 
     private var recorder: MeetingRecorder?
 
@@ -74,7 +77,26 @@ final class AppModel: ObservableObject {
             outputDirectory = FileManager.default.homeDirectoryForCurrentUser
                 .appending(path: "Documents/Meeting Notes", directoryHint: .isDirectory)
         }
+        refreshLaunchAtLoginStatus()
         refreshMicrophones()
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        launchAtLoginError = nil
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            launchAtLoginError = error.localizedDescription
+        }
+        refreshLaunchAtLoginStatus()
+    }
+
+    func clearLaunchAtLoginError() {
+        launchAtLoginError = nil
     }
 
     func refreshMicrophones() {
@@ -82,6 +104,10 @@ final class AppModel: ObservableObject {
         if !microphones.contains(where: { $0.id == selectedMicrophoneID }) {
             selectedMicrophoneID = ""
         }
+    }
+
+    private func refreshLaunchAtLoginStatus() {
+        launchAtLoginEnabled = SMAppService.mainApp.status == .enabled
     }
 
     func chooseOutputDirectory() {
