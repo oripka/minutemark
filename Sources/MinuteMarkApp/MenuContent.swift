@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MenuContent: View {
     @ObservedObject var model: AppModel
+    let onOpenTranscripts: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -18,6 +19,15 @@ struct MenuContent: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
+                Spacer()
+                Button(action: onOpenTranscripts) {
+                    Label(
+                        "Transcripts",
+                        systemImage: "doc.text.magnifyingglass"
+                    )
+                }
+                .buttonStyle(.borderless)
+                .help("Browse past transcripts")
             }
 
             HStack {

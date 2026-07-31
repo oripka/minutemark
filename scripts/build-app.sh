@@ -10,8 +10,10 @@ cd "$project_dir"
 swift build -c "$configuration"
 
 mkdir -p "$app_dir/Contents/MacOS"
+mkdir -p "$app_dir/Contents/Resources"
 cp "$build_dir/MinuteMark" "$app_dir/Contents/MacOS/MinuteMark"
 cp "$project_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
+cp "$project_dir/Resources/MinuteMark.icns" "$app_dir/Contents/Resources/MinuteMark.icns"
 
 signing_identity="${MINUTEMARK_CODESIGN_IDENTITY:-}"
 if [[ -z "$signing_identity" ]]; then

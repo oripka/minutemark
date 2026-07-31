@@ -18,7 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.animates = true
         popover.contentSize = NSSize(width: 380, height: 400)
         popover.contentViewController = NSHostingController(
-            rootView: MenuContent(model: model)
+            rootView: MenuContent(
+                model: model,
+                onOpenTranscripts: { [weak self] in
+                    self?.openTranscripts()
+                }
+            )
         )
         self.popover = popover
 
@@ -81,6 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         transcriptsItem.target = self
+        transcriptsItem.image = NSImage(
+            systemSymbolName: "doc.text.magnifyingglass",
+            accessibilityDescription: "Transcripts"
+        )
         menu.addItem(transcriptsItem)
 
         let settingsItem = NSMenuItem(
@@ -89,6 +98,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ","
         )
         settingsItem.target = self
+        settingsItem.image = NSImage(
+            systemSymbolName: "gearshape",
+            accessibilityDescription: "Settings"
+        )
         menu.addItem(settingsItem)
         menu.addItem(.separator())
 
@@ -98,6 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: "q"
         )
         quitItem.target = self
+        quitItem.image = NSImage(
+            systemSymbolName: "power",
+            accessibilityDescription: "Quit"
+        )
         menu.addItem(quitItem)
 
         statusItem.menu = menu
@@ -106,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openTranscripts() {
+        popover?.performClose(nil)
         if transcriptsWindowController == nil {
             let hostingController = NSHostingController(
                 rootView: TranscriptLibraryView(appModel: model)
@@ -118,8 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .miniaturizable,
                 .resizable
             ]
-            window.setContentSize(NSSize(width: 900, height: 600))
-            window.minSize = NSSize(width: 760, height: 500)
+            window.setContentSize(NSSize(width: 1_180, height: 760))
+            window.minSize = NSSize(width: 960, height: 600)
             window.isReleasedWhenClosed = false
             window.center()
             transcriptsWindowController = NSWindowController(window: window)
@@ -154,8 +172,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func statusImage(isRecording: Bool) -> NSImage? {
-        let name = isRecording ? "record.circle.fill" : "waveform"
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "MinuteMark")
+        let name = isRecording ? "record.circle.fill" : "waveform.badge.mic"
+        let image = NSImage(
+            systemSymbolName: name,
+            accessibilityDescription: "MinuteMark"
+        ) ?? NSImage(named: NSImage.applicationIconName)
         image?.isTemplate = !isRecording
         return image
     }

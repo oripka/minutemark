@@ -1,10 +1,12 @@
 import AppKit
+import Darwin
 import Foundation
+import MinuteMarkCore
 import SwiftUI
 
 struct TranscriptDocument: Identifiable, Hashable {
     let url: URL
-    let title: String
+    var title: String
     let date: Date
     let contents: String
 
@@ -22,14 +24,65 @@ struct TranscriptDocument: Identifiable, Hashable {
     }
 }
 
+private final class TranscriptDirectoryMonitor: ObservableObject {
+    @Published private(set) var revision = 0
+
+    private var source: DispatchSourceFileSystemObject?
+
+    func watch(_ directory: URL) {
+        stop()
+
+        let descriptor = open(directory.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .delete, .rename],
+            queue: .main
+        )
+        source.setEventHandler { [weak self] in
+            self?.revision &+= 1
+        }
+        source.setCancelHandler {
+            close(descriptor)
+        }
+        self.source = source
+        source.resume()
+    }
+
+    func stop() {
+        source?.cancel()
+        source = nil
+    }
+
+    deinit {
+        source?.cancel()
+    }
+}
+
 @MainActor
 final class TranscriptLibrary: ObservableObject {
     @Published private(set) var documents: [TranscriptDocument] = []
-    @Published var selectedURL: URL?
+    @Published var selectedURLs: Set<URL> = []
     @Published private(set) var errorMessage: String?
 
     var selectedDocument: TranscriptDocument? {
-        documents.first { $0.url == selectedURL }
+        guard selectedURLs.count == 1, let url = selectedURLs.first else {
+            return nil
+        }
+        return documents.first { $0.url == url }
+    }
+
+    var selectedDocuments: [TranscriptDocument] {
+        documents.filter { selectedURLs.contains($0.url) }
+    }
+
+    func previewTitle(_ title: String, for url: URL) {
+        guard let index = documents.firstIndex(where: { $0.url == url }) else {
+            return
+        }
+        let visibleTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        documents[index].title = visibleTitle.isEmpty ? "Untitled" : title
     }
 
     func reload(from directory: URL) {
@@ -45,43 +98,129 @@ final class TranscriptLibrary: ObservableObject {
                 .sorted { $0.date > $1.date }
             errorMessage = nil
 
-            if selectedURL == nil || selectedDocument == nil {
-                selectedURL = documents.first?.url
+            selectedURLs.formIntersection(documents.map(\.url))
+            if selectedURLs.isEmpty, let firstURL = documents.first?.url {
+                selectedURLs = [firstURL]
             }
         } catch let error as NSError
             where error.domain == NSCocoaErrorDomain &&
                   error.code == NSFileReadNoSuchFileError {
             documents = []
-            selectedURL = nil
+            selectedURLs = []
             errorMessage = nil
         } catch {
             documents = []
-            selectedURL = nil
+            selectedURLs = []
             errorMessage = error.localizedDescription
         }
     }
 
-    func moveToTrash(_ document: TranscriptDocument) throws {
-        let diagnosticsURL = document.url
+    func moveToTrash(_ targets: [TranscriptDocument]) throws {
+        for document in targets {
+            let diagnosticsURL = document.url
+                .deletingPathExtension()
+                .appendingPathExtension("diagnostics.log")
+
+            try FileManager.default.trashItem(
+                at: document.url,
+                resultingItemURL: nil
+            )
+
+            if FileManager.default.fileExists(atPath: diagnosticsURL.path) {
+                try FileManager.default.trashItem(
+                    at: diagnosticsURL,
+                    resultingItemURL: nil
+                )
+            }
+
+            documents.removeAll { $0.id == document.id }
+            selectedURLs.remove(document.url)
+        }
+
+        if selectedURLs.isEmpty, let firstURL = documents.first?.url {
+            selectedURLs = [firstURL]
+        }
+    }
+
+    @discardableResult
+    func rename(
+        _ document: TranscriptDocument,
+        to requestedTitle: String,
+        in directory: URL
+    ) throws -> URL {
+        let title = TranscriptFormatter.normalizedTitle(requestedTitle)
+        var lines = document.contents.components(separatedBy: .newlines)
+        if let headingIndex = lines.firstIndex(where: { $0.hasPrefix("# ") }) {
+            lines[headingIndex] = "# \(title)"
+        } else {
+            lines.insert(contentsOf: ["# \(title)", ""], at: 0)
+        }
+        let updatedContents = lines.joined(separator: "\n")
+
+        let desiredName = TranscriptFormatter.filename(
+            title: title,
+            for: document.date
+        )
+        let destination = availableDestination(
+            directory.appendingPathComponent(desiredName),
+            currentURL: document.url
+        )
+
+        try Data(updatedContents.utf8).write(
+            to: document.url,
+            options: .atomic
+        )
+
+        let oldDiagnosticsURL = document.url
+            .deletingPathExtension()
+            .appendingPathExtension("diagnostics.log")
+        let newDiagnosticsURL = destination
             .deletingPathExtension()
             .appendingPathExtension("diagnostics.log")
 
-        try FileManager.default.trashItem(
-            at: document.url,
-            resultingItemURL: nil
-        )
-
-        if FileManager.default.fileExists(atPath: diagnosticsURL.path) {
-            try FileManager.default.trashItem(
-                at: diagnosticsURL,
-                resultingItemURL: nil
+        if destination != document.url {
+            try FileManager.default.moveItem(
+                at: document.url,
+                to: destination
             )
+            if FileManager.default.fileExists(atPath: oldDiagnosticsURL.path) {
+                try FileManager.default.moveItem(
+                    at: oldDiagnosticsURL,
+                    to: newDiagnosticsURL
+                )
+            }
         }
 
-        documents.removeAll { $0.id == document.id }
-        if selectedURL == document.url {
-            selectedURL = documents.first?.url
+        reload(from: directory)
+        selectedURLs = [destination]
+        return destination
+    }
+
+    private func availableDestination(
+        _ desiredURL: URL,
+        currentURL: URL
+    ) -> URL {
+        let fileManager = FileManager.default
+        guard desiredURL != currentURL else { return desiredURL }
+
+        let base = desiredURL.deletingPathExtension().lastPathComponent
+        let directory = desiredURL.deletingLastPathComponent()
+        var candidate = desiredURL
+        var suffix = 2
+
+        while fileManager.fileExists(atPath: candidate.path) ||
+              fileManager.fileExists(
+                atPath: candidate
+                    .deletingPathExtension()
+                    .appendingPathExtension("diagnostics.log")
+                    .path
+              ) {
+            candidate = directory
+                .appendingPathComponent("\(base)-\(suffix)")
+                .appendingPathExtension("md")
+            suffix += 1
         }
+        return candidate
     }
 
     private func loadDocument(at url: URL) -> TranscriptDocument? {
@@ -122,9 +261,12 @@ final class TranscriptLibrary: ObservableObject {
 struct TranscriptLibraryView: View {
     @ObservedObject var appModel: AppModel
     @StateObject private var library = TranscriptLibrary()
+    @StateObject private var directoryMonitor = TranscriptDirectoryMonitor()
     @State private var searchText = ""
-    @State private var pendingDeletion: TranscriptDocument?
-    @State private var deletionError: String?
+    @State private var pendingDeletion: [TranscriptDocument] = []
+    @State private var isDeletionConfirmationPresented = false
+    @State private var pendingRename: TranscriptDocument?
+    @State private var operationError: String?
 
     private var visibleDocuments: [TranscriptDocument] {
         guard !searchText.isEmpty else { return library.documents }
@@ -148,7 +290,7 @@ struct TranscriptLibraryView: View {
                         )
                     )
                 } else {
-                    List(visibleDocuments, selection: $library.selectedURL) { document in
+                    List(visibleDocuments, selection: $library.selectedURLs) { document in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(document.title)
                                 .font(.headline)
@@ -159,7 +301,15 @@ struct TranscriptLibraryView: View {
                         }
                         .padding(.vertical, 4)
                         .tag(document.url)
+                        .onTapGesture(count: 2) {
+                            guard !isActive(document) else { return }
+                            pendingRename = document
+                        }
                         .contextMenu {
+                            Button("Rename…") {
+                                pendingRename = document
+                            }
+                            .disabled(isActive(document))
                             Button("Open in TextEdit") {
                                 appModel.openTranscriptInTextEdit(document.url)
                             }
@@ -170,38 +320,85 @@ struct TranscriptLibraryView: View {
                             }
                             Divider()
                             Button("Move to Trash…", role: .destructive) {
-                                pendingDeletion = document
+                                requestDeletion([document])
                             }
+                            .disabled(isActive(document))
                         }
+                    }
+                    .onDeleteCommand {
+                        let documents = library.selectedDocuments
+                        guard !documents.isEmpty,
+                              !documents.contains(where: isActive)
+                        else {
+                            return
+                        }
+                        requestDeletion(documents)
                     }
                 }
             }
             .navigationTitle("Transcripts")
             .searchable(text: $searchText, prompt: "Search transcripts")
-            .toolbar {
-                Button {
-                    library.reload(from: appModel.outputDirectory)
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .help("Refresh transcripts")
-            }
+            .navigationSplitViewColumnWidth(
+                min: 320,
+                ideal: 380,
+                max: 480
+            )
         } detail: {
-            if let document = library.selectedDocument {
-                TranscriptPreview(document: document)
+            if library.selectedDocuments.count > 1 {
+                MultiSelectionView(count: library.selectedDocuments.count)
                     .toolbar {
+                        Button(role: .destructive) {
+                            requestDeletion(library.selectedDocuments)
+                        } label: {
+                            Label("Move to Trash", systemImage: "trash")
+                        }
+                        .help("Move selected transcripts to Trash")
+                        .disabled(library.selectedDocuments.contains(where: isActive))
+                    }
+            } else if let document = library.selectedDocument {
+                TranscriptPreview(
+                    document: document,
+                    isRenameDisabled: isActive(document),
+                    onTitleChange: { draftTitle in
+                        library.previewTitle(draftTitle, for: document.url)
+                    },
+                    onRename: { newTitle in
+                        do {
+                            try library.rename(
+                                document,
+                                to: newTitle,
+                                in: appModel.outputDirectory
+                            )
+                            return true
+                        } catch {
+                            operationError = error.localizedDescription
+                            library.reload(from: appModel.outputDirectory)
+                            return false
+                        }
+                    }
+                )
+                    .toolbar {
+                        Button {
+                            pendingRename = document
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
+                        .help("Rename transcript")
+                        .disabled(isActive(document))
+
                         Button {
                             appModel.openTranscriptInTextEdit(document.url)
                         } label: {
-                            Label("Open in TextEdit", systemImage: "square.and.pencil")
+                            Label("Open in TextEdit", systemImage: "arrow.up.forward.app")
                         }
 
                         Button(role: .destructive) {
-                            pendingDeletion = document
+                            requestDeletion([document])
                         } label: {
                             Label("Move to Trash", systemImage: "trash")
                         }
                         .help("Move transcript to Trash")
+                        .disabled(isActive(document))
                     }
             } else {
                 ContentUnavailableView(
@@ -211,69 +408,283 @@ struct TranscriptLibraryView: View {
                 )
             }
         }
-        .frame(minWidth: 760, minHeight: 500)
+        .frame(minWidth: 960, minHeight: 600)
         .onAppear {
+            directoryMonitor.watch(appModel.outputDirectory)
             library.reload(from: appModel.outputDirectory)
         }
         .onChange(of: appModel.outputDirectory) {
+            directoryMonitor.watch(appModel.outputDirectory)
+            library.reload(from: appModel.outputDirectory)
+        }
+        .onChange(of: directoryMonitor.revision) {
             library.reload(from: appModel.outputDirectory)
         }
         .confirmationDialog(
-            "Move this transcript to Trash?",
-            isPresented: Binding(
-                get: { pendingDeletion != nil },
-                set: { if !$0 { pendingDeletion = nil } }
-            ),
+            pendingDeletion.count == 1
+                ? "Move this transcript to Trash?"
+                : "Move \(pendingDeletion.count) transcripts to Trash?",
+            isPresented: $isDeletionConfirmationPresented,
             titleVisibility: .visible
         ) {
             Button("Move to Trash", role: .destructive) {
-                guard let document = pendingDeletion else { return }
+                let documents = pendingDeletion
+                guard !documents.isEmpty else { return }
                 do {
-                    try library.moveToTrash(document)
+                    try library.moveToTrash(documents)
                 } catch {
-                    deletionError = error.localizedDescription
+                    operationError = error.localizedDescription
                     library.reload(from: appModel.outputDirectory)
                 }
-                pendingDeletion = nil
+                pendingDeletion = []
+                isDeletionConfirmationPresented = false
             }
             Button("Cancel", role: .cancel) {
-                pendingDeletion = nil
+                pendingDeletion = []
+                isDeletionConfirmationPresented = false
             }
         } message: {
-            if let document = pendingDeletion {
+            if pendingDeletion.count == 1, let document = pendingDeletion.first {
                 Text(
                     "“\(document.title)” and its diagnostics log can be recovered from macOS Trash."
                 )
+            } else if pendingDeletion.count > 1 {
+                Text(
+                    "\(pendingDeletion.count) transcripts and their diagnostics logs can be recovered from macOS Trash."
+                )
             }
         }
+        .sheet(item: $pendingRename) { document in
+            RenameTranscriptView(
+                currentTitle: document.title,
+                onCancel: {
+                    pendingRename = nil
+                },
+                onRename: { newTitle in
+                    do {
+                        try library.rename(
+                            document,
+                            to: newTitle,
+                            in: appModel.outputDirectory
+                        )
+                    } catch {
+                        operationError = error.localizedDescription
+                        library.reload(from: appModel.outputDirectory)
+                    }
+                    pendingRename = nil
+                }
+            )
+        }
         .alert(
-            "Couldn’t Move Transcript",
+            "Couldn’t Update Transcript",
             isPresented: Binding(
-                get: { deletionError != nil },
-                set: { if !$0 { deletionError = nil } }
+                get: { operationError != nil },
+                set: { if !$0 { operationError = nil } }
             )
         ) {
             Button("OK") {
-                deletionError = nil
+                operationError = nil
             }
         } message: {
-            Text(deletionError ?? "An unknown error occurred.")
+            Text(operationError ?? "An unknown error occurred.")
         }
+    }
+
+    private func isActive(_ document: TranscriptDocument) -> Bool {
+        appModel.isRecording && document.url == appModel.transcriptURL
+    }
+
+    private func requestDeletion(_ documents: [TranscriptDocument]) {
+        guard !documents.isEmpty else { return }
+        pendingDeletion = documents
+        isDeletionConfirmationPresented = true
+    }
+}
+
+private struct MultiSelectionView: View {
+    let count: Int
+
+    var body: some View {
+        ContentUnavailableView(
+            "\(count) transcripts selected",
+            systemImage: "doc.on.doc",
+            description: Text(
+                "Press Delete or use the trash button to move them to Trash."
+            )
+        )
+    }
+}
+
+private struct RenameTranscriptView: View {
+    let currentTitle: String
+    let onCancel: () -> Void
+    let onRename: (String) -> Void
+
+    @State private var title: String
+    @FocusState private var titleIsFocused: Bool
+
+    init(
+        currentTitle: String,
+        onCancel: @escaping () -> Void,
+        onRename: @escaping (String) -> Void
+    ) {
+        self.currentTitle = currentTitle
+        self.onCancel = onCancel
+        self.onRename = onRename
+        _title = State(initialValue: currentTitle)
+    }
+
+    private var cleanedTitle: String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Rename transcript")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Text("The Markdown heading and filename will both be updated.")
+                    .foregroundStyle(.secondary)
+            }
+
+            TextField("Transcript title", text: $title)
+                .textFieldStyle(.roundedBorder)
+                .focused($titleIsFocused)
+                .onSubmit(rename)
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Rename", action: rename)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(cleanedTitle.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 430)
+        .onAppear {
+            titleIsFocused = true
+        }
+    }
+
+    private func rename() {
+        guard !cleanedTitle.isEmpty else { return }
+        onRename(cleanedTitle)
     }
 }
 
 private struct TranscriptPreview: View {
     let document: TranscriptDocument
+    let isRenameDisabled: Bool
+    let onTitleChange: (String) -> Void
+    let onRename: (String) -> Bool
+
+    @State private var draftTitle: String
+    @State private var committedTitle: String
+    @FocusState private var titleIsFocused: Bool
+
+    init(
+        document: TranscriptDocument,
+        isRenameDisabled: Bool,
+        onTitleChange: @escaping (String) -> Void,
+        onRename: @escaping (String) -> Bool
+    ) {
+        self.document = document
+        self.isRenameDisabled = isRenameDisabled
+        self.onTitleChange = onTitleChange
+        self.onRename = onRename
+        _draftTitle = State(initialValue: document.title)
+        _committedTitle = State(initialValue: document.title)
+    }
 
     var body: some View {
         ScrollView {
-            MarkdownDocumentView(markdown: document.contents)
+            VStack(alignment: .leading, spacing: 14) {
+                TextField("Transcript title", text: $draftTitle)
+                    .textFieldStyle(.plain)
+                    .font(.largeTitle)
+                    .fontWeight(.semibold)
+                    .focused($titleIsFocused)
+                    .disabled(isRenameDisabled)
+                    .help(
+                        isRenameDisabled
+                            ? "Stop transcription before renaming this note"
+                            : "Click to edit; press Return to rename"
+                    )
+                    .onSubmit(commitTitle)
+                    .onChange(of: draftTitle) { _, newTitle in
+                        onTitleChange(newTitle)
+                    }
+                    .onExitCommand {
+                        draftTitle = committedTitle
+                        onTitleChange(committedTitle)
+                        titleIsFocused = false
+                    }
+                    .onChange(of: titleIsFocused) { _, isFocused in
+                        if !isFocused {
+                            commitTitle()
+                        }
+                    }
+
+                MarkdownDocumentView(markdown: markdownWithoutTitle)
+            }
                 .frame(maxWidth: 720, alignment: .topLeading)
                 .padding(32)
                 .frame(maxWidth: .infinity, alignment: .top)
         }
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(document.title)
+        .onChange(of: document.title) { _, newTitle in
+            if !titleIsFocused {
+                draftTitle = newTitle
+                committedTitle = newTitle
+            }
+        }
+    }
+
+    private var cleanedTitle: String {
+        draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var markdownWithoutTitle: String {
+        var lines = document.contents.components(separatedBy: .newlines)
+        guard let headingIndex = lines.firstIndex(where: {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        }), lines[headingIndex].hasPrefix("# ") else {
+            return document.contents
+        }
+
+        lines.remove(at: headingIndex)
+        if lines.indices.contains(headingIndex),
+           lines[headingIndex].trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.remove(at: headingIndex)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func commitTitle() {
+        guard !isRenameDisabled else {
+            draftTitle = document.title
+            return
+        }
+        guard !cleanedTitle.isEmpty else {
+            draftTitle = document.title
+            return
+        }
+        guard cleanedTitle != committedTitle else {
+            draftTitle = committedTitle
+            return
+        }
+
+        if onRename(cleanedTitle) {
+            committedTitle = cleanedTitle
+            draftTitle = cleanedTitle
+        } else {
+            draftTitle = committedTitle
+            onTitleChange(committedTitle)
+        }
     }
 }
 

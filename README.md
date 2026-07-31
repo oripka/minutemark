@@ -3,6 +3,8 @@
 A small, native macOS menu-bar app that transcribes microphone and meeting
 audio locally into Markdown. MinuteMark does not retain audio recordings.
 
+![MinuteMark app icon](Resources/AppIcon.png)
+
 ## What it does
 
 - Captures a selected microphone and system audio as separate streams
@@ -46,8 +48,16 @@ transcription begins.
 - Right-click the icon for Settings or Quit.
 - Open **Transcripts…** from the right-click menu to search and preview past
   Markdown notes in a clean library view.
+- The transcript library updates automatically when notes are created, renamed,
+  or moved to Trash.
 - Move unwanted transcripts and their diagnostics logs to macOS Trash from the
   library toolbar or a note’s context menu.
+- Select several transcripts with Command-click or Shift-click, then use the
+  toolbar trash button or press Delete to move them to Trash together.
+- Rename a transcript by editing its large preview title directly,
+  double-clicking its list row, using the toolbar pencil, or choosing Rename
+  from its context menu. The Markdown heading, safe filename, and diagnostics
+  filename stay in sync.
 - Choose language, then select **Start transcription**.
 - Enter a title such as `Product planning`; the note will be named like
   `2026-07-31_104512_Product-planning.md`.

@@ -8,6 +8,8 @@
     <string>MinuteMark</string>
     <key>CFBundleIdentifier</key>
     <string>app.minutemark.local</string>
+    <key>CFBundleIconFile</key>
+    <string>MinuteMark</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -17,7 +19,7 @@
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>4</string>
     <key>LSMinimumSystemVersion</key>
     <string>26.0</string>
     <key>LSUIElement</key>
