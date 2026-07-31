@@ -61,6 +61,29 @@ final class TranscriptLibrary: ObservableObject {
         }
     }
 
+    func moveToTrash(_ document: TranscriptDocument) throws {
+        let diagnosticsURL = document.url
+            .deletingPathExtension()
+            .appendingPathExtension("diagnostics.log")
+
+        try FileManager.default.trashItem(
+            at: document.url,
+            resultingItemURL: nil
+        )
+
+        if FileManager.default.fileExists(atPath: diagnosticsURL.path) {
+            try FileManager.default.trashItem(
+                at: diagnosticsURL,
+                resultingItemURL: nil
+            )
+        }
+
+        documents.removeAll { $0.id == document.id }
+        if selectedURL == document.url {
+            selectedURL = documents.first?.url
+        }
+    }
+
     private func loadDocument(at url: URL) -> TranscriptDocument? {
         guard let contents = try? String(contentsOf: url, encoding: .utf8) else {
             return nil
@@ -100,6 +123,8 @@ struct TranscriptLibraryView: View {
     @ObservedObject var appModel: AppModel
     @StateObject private var library = TranscriptLibrary()
     @State private var searchText = ""
+    @State private var pendingDeletion: TranscriptDocument?
+    @State private var deletionError: String?
 
     private var visibleDocuments: [TranscriptDocument] {
         guard !searchText.isEmpty else { return library.documents }
@@ -143,6 +168,10 @@ struct TranscriptLibraryView: View {
                                     [document.url]
                                 )
                             }
+                            Divider()
+                            Button("Move to Trash…", role: .destructive) {
+                                pendingDeletion = document
+                            }
                         }
                     }
                 }
@@ -166,6 +195,13 @@ struct TranscriptLibraryView: View {
                         } label: {
                             Label("Open in TextEdit", systemImage: "square.and.pencil")
                         }
+
+                        Button(role: .destructive) {
+                            pendingDeletion = document
+                        } label: {
+                            Label("Move to Trash", systemImage: "trash")
+                        }
+                        .help("Move transcript to Trash")
                     }
             } else {
                 ContentUnavailableView(
@@ -181,6 +217,47 @@ struct TranscriptLibraryView: View {
         }
         .onChange(of: appModel.outputDirectory) {
             library.reload(from: appModel.outputDirectory)
+        }
+        .confirmationDialog(
+            "Move this transcript to Trash?",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Move to Trash", role: .destructive) {
+                guard let document = pendingDeletion else { return }
+                do {
+                    try library.moveToTrash(document)
+                } catch {
+                    deletionError = error.localizedDescription
+                    library.reload(from: appModel.outputDirectory)
+                }
+                pendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeletion = nil
+            }
+        } message: {
+            if let document = pendingDeletion {
+                Text(
+                    "“\(document.title)” and its diagnostics log can be recovered from macOS Trash."
+                )
+            }
+        }
+        .alert(
+            "Couldn’t Move Transcript",
+            isPresented: Binding(
+                get: { deletionError != nil },
+                set: { if !$0 { deletionError = nil } }
+            )
+        ) {
+            Button("OK") {
+                deletionError = nil
+            }
+        } message: {
+            Text(deletionError ?? "An unknown error occurred.")
         }
     }
 }
