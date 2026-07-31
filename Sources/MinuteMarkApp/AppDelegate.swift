@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var settingsWindowController: NSWindowController?
+    private var transcriptsWindowController: NSWindowController?
     private var recordingObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -74,6 +75,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let statusItem, let button = statusItem.button else { return }
 
         let menu = NSMenu()
+        let transcriptsItem = NSMenuItem(
+            title: "Transcripts…",
+            action: #selector(openTranscripts),
+            keyEquivalent: ""
+        )
+        transcriptsItem.target = self
+        menu.addItem(transcriptsItem)
+
         let settingsItem = NSMenuItem(
             title: "Settings…",
             action: #selector(openSettings),
@@ -94,6 +103,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
         button.performClick(nil)
         statusItem.menu = nil
+    }
+
+    @objc private func openTranscripts() {
+        if transcriptsWindowController == nil {
+            let hostingController = NSHostingController(
+                rootView: TranscriptLibraryView(appModel: model)
+            )
+            let window = NSWindow(contentViewController: hostingController)
+            window.title = "MinuteMark Transcripts"
+            window.styleMask = [
+                .titled,
+                .closable,
+                .miniaturizable,
+                .resizable
+            ]
+            window.setContentSize(NSSize(width: 900, height: 600))
+            window.minSize = NSSize(width: 760, height: 500)
+            window.isReleasedWhenClosed = false
+            window.center()
+            transcriptsWindowController = NSWindowController(window: window)
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        transcriptsWindowController?.showWindow(nil)
+        transcriptsWindowController?.window?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func openSettings() {

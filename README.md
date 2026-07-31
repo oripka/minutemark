@@ -44,6 +44,8 @@ transcription begins.
 
 - Left-click the menu-bar waveform to open the transcription controls.
 - Right-click the icon for Settings or Quit.
+- Open **Transcripts…** from the right-click menu to search and preview past
+  Markdown notes in a clean library view.
 - Choose language, then select **Start transcription**.
 - Enter a title such as `Product planning`; the note will be named like
   `2026-07-31_104512_Product-planning.md`.

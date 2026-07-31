@@ -107,8 +107,8 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    func openTranscriptInTextEdit() {
-        guard let transcriptURL,
+    func openTranscriptInTextEdit(_ url: URL? = nil) {
+        guard let transcriptURL = url ?? transcriptURL,
               let textEditURL = NSWorkspace.shared.urlForApplication(
                 withBundleIdentifier: "com.apple.TextEdit"
               )
