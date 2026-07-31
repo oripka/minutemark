@@ -16,7 +16,7 @@ struct MeetingLanguage: Identifiable, Hashable, Sendable {
     }
 }
 
-enum LanguageModelState: Equatable {
+enum LanguageModelState: Equatable, Sendable {
     case checking
     case installed
     case downloading
@@ -26,9 +26,9 @@ enum LanguageModelState: Equatable {
     var label: String {
         switch self {
         case .checking: "Checking language model…"
-        case .installed: "On-device model installed"
+        case .installed: "Installed for MinuteMark"
         case .downloading: "Language model downloading…"
-        case .downloadRequired: "Downloads automatically on first use"
+        case .downloadRequired: "Download required for MinuteMark"
         case .unsupported: "Language model unavailable"
         }
     }
@@ -77,7 +77,12 @@ final class AppModel: ObservableObject {
         MeetingLanguage(locale: Locale(identifier: "de-DE"))
     ]
     @Published private(set) var languageModelState: LanguageModelState = .checking
+    @Published private(set) var languageModelStates: [String: LanguageModelState] = [:]
     @Published private(set) var languageModelDownloadProgress: Double?
+    @Published private(set) var downloadingLanguageID: String?
+    @Published private(set) var languageModelDownloadError: String?
+    @Published private(set) var reservedLanguageIDs: Set<String> = []
+    @Published private(set) var languageModelManagementMessage: String?
     @Published var isLanguageDownloadConfirmationPresented = false
     @Published private(set) var pendingLanguageDownload: MeetingLanguage?
     @Published var transcriptTitle = ""
@@ -117,6 +122,33 @@ final class AppModel: ObservableObject {
         return preferredLanguage(from: languages)
     }
 
+    var installedLanguages: [MeetingLanguage] {
+        languages.filter { languageModelStates[$0.id] == .installed }
+    }
+
+    var downloadableLanguages: [MeetingLanguage] {
+        languages.filter {
+            let state = languageModelStates[$0.id]
+            return state != .installed && state != .unsupported
+        }
+    }
+
+    var resolvedLanguageIsInstalled: Bool {
+        languageModelStates[resolvedLanguage.id] == .installed
+    }
+
+    var selectedMissingLanguage: MeetingLanguage? {
+        guard selectedLanguageID != Self.automaticLanguageID,
+              let language = languages.first(where: {
+                  $0.id == selectedLanguageID
+              }),
+              languageModelStates[language.id] != .installed
+        else {
+            return nil
+        }
+        return language
+    }
+
     init() {
         selectedLanguageID = UserDefaults.standard.string(
             forKey: "transcriptionLanguage"
@@ -135,10 +167,7 @@ final class AppModel: ObservableObject {
         }
         refreshLaunchAtLoginStatus()
         refreshMicrophones()
-        Task {
-            await refreshLanguages()
-            await refreshLanguageModelState()
-        }
+        Task { await refreshLanguages() }
     }
 
     func refreshLanguages() async {
@@ -159,6 +188,11 @@ final class AppModel: ObservableObject {
            !languages.contains(where: { $0.id == selectedLanguageID }) {
             selectedLanguageID = Self.automaticLanguageID
         }
+
+        languageModelStates = await modelStates(for: supportedLanguages)
+        await refreshReservedLanguages()
+        sortLanguagesByAvailability()
+        languageModelState = languageModelStates[resolvedLanguage.id] ?? .checking
     }
 
     func refreshLanguageModelState() async {
@@ -171,18 +205,10 @@ final class AppModel: ObservableObject {
         let status = await AssetInventory.status(forModules: [transcriber])
 
         guard resolvedLanguage.id == language.id else { return }
-        switch status {
-        case .installed:
-            languageModelState = .installed
-        case .downloading:
-            languageModelState = .downloading
-        case .supported:
-            languageModelState = .downloadRequired
-        case .unsupported:
-            languageModelState = .unsupported
-        @unknown default:
-            languageModelState = .checking
-        }
+        let state = Self.modelState(for: status)
+        languageModelState = state
+        languageModelStates[language.id] = state
+        sortLanguagesByAvailability()
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -282,6 +308,101 @@ final class AppModel: ObservableObject {
         isLanguageDownloadConfirmationPresented = false
     }
 
+    func downloadLanguageModel(_ language: MeetingLanguage) async {
+        guard downloadingLanguageID == nil else { return }
+        downloadingLanguageID = language.id
+        languageModelDownloadError = nil
+        languageModelDownloadProgress = 0
+        languageModelStates[language.id] = .downloading
+
+        defer {
+            downloadingLanguageID = nil
+            languageModelDownloadProgress = nil
+        }
+
+        do {
+            guard let locale = await SpeechTranscriber.supportedLocale(
+                equivalentTo: Locale(identifier: language.id)
+            ) else {
+                throw TranscriptionError.unsupportedLanguage(language.id)
+            }
+            let transcriber = SpeechTranscriber(
+                locale: locale,
+                preset: .progressiveTranscription
+            )
+            let modules: [any SpeechModule] = [transcriber]
+            let status = await AssetInventory.status(forModules: modules)
+            if status != .installed {
+                guard let request = try await AssetInventory
+                    .assetInstallationRequest(supporting: modules)
+                else {
+                    throw TranscriptionError.modelUnavailable(language.id)
+                }
+
+                let progressTask = Task { @MainActor [weak self] in
+                    while !Task.isCancelled {
+                        let fraction = request.progress.fractionCompleted
+                        self?.languageModelDownloadProgress = fraction.isFinite
+                            ? min(1, max(0, fraction))
+                            : 0
+                        try? await Task.sleep(for: .milliseconds(200))
+                    }
+                }
+                defer { progressTask.cancel() }
+                try await request.downloadAndInstall()
+            }
+
+            languageModelStates[language.id] = .installed
+            sortLanguagesByAvailability()
+            selectedLanguageID = language.id
+            languageModelState = .installed
+        } catch {
+            languageModelDownloadError = error.localizedDescription
+            await refreshLanguageModelState(for: language)
+        }
+    }
+
+    func clearLanguageModelDownloadError() {
+        languageModelDownloadError = nil
+    }
+
+    func refreshReservedLanguages() async {
+        let reservedLocales = await AssetInventory.reservedLocales
+        reservedLanguageIDs = Set(reservedLocales.map {
+            Self.normalizedLocaleIdentifier($0.identifier)
+        })
+    }
+
+    func isLanguageReserved(_ language: MeetingLanguage) -> Bool {
+        reservedLanguageIDs.contains(
+            Self.normalizedLocaleIdentifier(language.id)
+        )
+    }
+
+    func releaseLanguageModel(_ language: MeetingLanguage) async {
+        guard !isRecording, !isBusy else { return }
+        guard let locale = await SpeechTranscriber.supportedLocale(
+            equivalentTo: Locale(identifier: language.id)
+        ) else {
+            languageModelManagementMessage = "The \(language.label) model is no longer supported on this Mac."
+            return
+        }
+
+        let released = await AssetInventory.release(reservedLocale: locale)
+        await refreshReservedLanguages()
+        await refreshLanguageModelState(for: language)
+
+        if released {
+            languageModelManagementMessage = "MinuteMark released the \(language.label) model. macOS will decide when to reclaim its storage."
+        } else {
+            languageModelManagementMessage = "The \(language.label) model is managed by macOS or another app and cannot be released by MinuteMark."
+        }
+    }
+
+    func clearLanguageModelManagementMessage() {
+        languageModelManagementMessage = nil
+    }
+
     private func beginTranscription() async {
         guard !isBusy, !isRecording else { return }
         isBusy = true
@@ -332,6 +453,9 @@ final class AppModel: ObservableObject {
             isRecording = true
             status = "Transcribing microphone + meeting audio"
             languageModelState = .installed
+            languageModelStates[language.id] = .installed
+            await refreshReservedLanguages()
+            sortLanguagesByAvailability()
             languageModelDownloadProgress = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -373,6 +497,76 @@ final class AppModel: ObservableObject {
         return supportedLanguages.first(where: {
             Locale(identifier: $0.id).language.languageCode?.identifier == "en"
         }) ?? supportedLanguages[0]
+    }
+
+    private func modelStates(
+        for supportedLanguages: [MeetingLanguage]
+    ) async -> [String: LanguageModelState] {
+        await withTaskGroup(
+            of: (String, LanguageModelState).self,
+            returning: [String: LanguageModelState].self
+        ) { group in
+            for language in supportedLanguages {
+                group.addTask {
+                    let transcriber = SpeechTranscriber(
+                        locale: Locale(identifier: language.id),
+                        preset: .progressiveTranscription
+                    )
+                    let status = await AssetInventory.status(
+                        forModules: [transcriber]
+                    )
+                    return (language.id, Self.modelState(for: status))
+                }
+            }
+
+            var states: [String: LanguageModelState] = [:]
+            for await (identifier, state) in group {
+                states[identifier] = state
+            }
+            return states
+        }
+    }
+
+    private func refreshLanguageModelState(
+        for language: MeetingLanguage
+    ) async {
+        let transcriber = SpeechTranscriber(
+            locale: Locale(identifier: language.id),
+            preset: .progressiveTranscription
+        )
+        let status = await AssetInventory.status(forModules: [transcriber])
+        languageModelStates[language.id] = Self.modelState(for: status)
+        sortLanguagesByAvailability()
+    }
+
+    private static nonisolated func modelState(
+        for status: AssetInventory.Status
+    ) -> LanguageModelState {
+        switch status {
+        case .installed: .installed
+        case .downloading: .downloading
+        case .supported: .downloadRequired
+        case .unsupported: .unsupported
+        @unknown default: .checking
+        }
+    }
+
+    private static nonisolated func normalizedLocaleIdentifier(
+        _ identifier: String
+    ) -> String {
+        identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+    }
+
+    private func sortLanguagesByAvailability() {
+        languages.sort { lhs, rhs in
+            let lhsInstalled = languageModelStates[lhs.id] == .installed
+            let rhsInstalled = languageModelStates[rhs.id] == .installed
+            if lhsInstalled != rhsInstalled {
+                return lhsInstalled
+            }
+            return lhs.label.localizedCaseInsensitiveCompare(rhs.label)
+                == .orderedAscending
+        }
     }
 
     func stop() async {

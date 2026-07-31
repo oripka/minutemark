@@ -16,6 +16,12 @@ audio locally into Markdown. MinuteMark does not retain audio recordings.
   an Automatic option that follows the Mac’s preferred language
 - Shows whether the selected language model is installed; missing models
   require confirmation and show progress while downloading
+- Groups downloaded language models first in the picker and marks them with a
+  checkmark
+- Keeps the main language picker compact; additional models are selected and
+  downloaded from a searchable **Download More…** dialog
+- Lets MinuteMark release models it currently reserves; macOS controls when
+  their storage is actually reclaimed
 - Supports automatic or manual input-channel selection for multi-channel
   audio interfaces
 - Shows a transient microphone activity meter in Settings without storing audio

@@ -410,7 +410,7 @@ private final class ConverterInputSource: @unchecked Sendable {
     }
 }
 
-private enum TranscriptionError: LocalizedError {
+enum TranscriptionError: LocalizedError {
     case unavailable
     case unsupportedLanguage(String)
     case modelUnavailable(String)
